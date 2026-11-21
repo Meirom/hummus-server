@@ -6,60 +6,57 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-  console.error('Missing FIREBASE_SERVICE_ACCOUNT env variable');
-  process.exit(1);
+const serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT;
+const dbUrl =
+  process.env.FIREBASE_DATABASE_URL ||
+  'https://hummus-pasta-default-rtdb.firebaseio.com';
+
+if (!serviceAccountRaw) {
+  console.error('Missing FIREBASE_SERVICE_ACCOUNT environment variable');
+} else {
+  const serviceAccount = JSON.parse(serviceAccountRaw);
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      databaseURL: dbUrl,
+    });
+  }
 }
 
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: 'https://hummus-pasta-default-rtdb.firebaseio.com',
-});
-
-const db = admin.database();
-const messaging = admin.messaging();
-
 app.get('/', (req, res) => {
-  res.send('Hummus push server is alive 🦐');
+  res.status(200).send('hummus-server is running');
 });
 
 app.post('/send-push', async (req, res) => {
   try {
     const { targetUid, title, body } = req.body || {};
-    if (!targetUid || !title || !body) {
-      return res.status(400).json({ error: 'Missing targetUid, title or body' });
+    if (!targetUid) {
+      return res.status(400).json({ ok: false, error: 'Missing targetUid' });
     }
 
-    const snap = await db.ref(`users/${targetUid}/fcmToken`).get();
+    const snap = await admin.database().ref(`users/${targetUid}/fcmToken`).get();
     const token = snap.val();
+
     if (!token) {
-      return res.status(404).json({ ok: false, reason: 'No FCM token for user' });
+      return res.status(200).json({ ok: false, reason: 'No FCM token for user' });
     }
 
-    const messageId = await messaging.send({
+    await admin.messaging().send({
       token,
-      notification: { title, body },
-      webpush: {
-        notification: {
-          title,
-          body,
-          dir: 'rtl',
-          lang: 'he',
-          vibrate: [200, 100, 200],
-        },
+      notification: {
+        title: title || 'חומוס על פסטה 🦐',
+        body: body || 'יש לך צפצוף חדש!',
       },
     });
 
-    res.json({ ok: true, messageId });
+    return res.status(200).json({ ok: true });
   } catch (err) {
     console.error('Push error:', err);
-    res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
 });

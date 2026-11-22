@@ -25,6 +25,71 @@ async function sendTelegram(chatId, text) {
   });
 }
 
+function getIsraelDateParts(offsetDays = 0) {
+  const base = new Date(Date.now() + offsetDays * 86400000);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jerusalem',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(base);
+
+  const map = {};
+  parts.forEach((p) => { map[p.type] = p.value; });
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    key: `${map.year}-${map.month}-${map.day}`
+  };
+}
+
+function getDaysUntilBirthday(bday) {
+  if (!bday || !bday.day || !bday.month) return null;
+  const now = getIsraelDateParts(0);
+  const todayUtc = Date.UTC(now.year, now.month - 1, now.day);
+  let targetUtc = Date.UTC(now.year, Number(bday.month) - 1, Number(bday.day));
+  if (targetUtc < todayUtc) {
+    targetUtc = Date.UTC(now.year + 1, Number(bday.month) - 1, Number(bday.day));
+  }
+  return Math.round((targetUtc - todayUtc) / 86400000);
+}
+
+async function checkBirthdaysAuto() {
+  if (!BOT_TOKEN) return;
+  try {
+    const snap = await db.ref('users').once('value');
+    const users = snap.val() || {};
+    const entries = Object.entries(users).filter(([, u]) => u && u.name);
+    const todayInfo = getIsraelDateParts(0);
+
+    for (const [bdayUid, bdayUser] of entries) {
+      if (!bdayUser.birthday) continue;
+      const daysLeft = getDaysUntilBirthday(bdayUser.birthday);
+      if (daysLeft === null || daysLeft > 7) continue;
+
+      const msgText = daysLeft === 0
+        ? `🎂 היום יום ההולדת של ${bdayUser.name}!! אל תשכחו לברך ולהפתיע 🎉🦐`
+        : daysLeft === 1
+        ? `🤫 מחר (עוד יום אחד!) יום ההולדת של ${bdayUser.name} (${bdayUser.birthday.day}.${bdayUser.birthday.month}) — תתארגנו על משהו מיוחד!`
+        : `🤫 עוד ${daysLeft} ימים יום ההולדת של ${bdayUser.name} (${bdayUser.birthday.day}.${bdayUser.birthday.month}) — זמן לתכנן הפתעה!`;
+
+      for (const [viewerUid, viewerUser] of entries) {
+        if (viewerUid === bdayUid || !viewerUser.telegramChatId) continue;
+
+        const sentRef = db.ref(`bdaySent/${todayInfo.key}/${bdayUid}_${viewerUid}`);
+        const sentSnap = await sentRef.once('value');
+        if (sentSnap.exists()) continue;
+
+        await sendTelegram(viewerUser.telegramChatId, msgText);
+        await sentRef.set(true);
+      }
+    }
+  } catch (err) {
+    console.error('Birthday check error:', err.message);
+  }
+}
+
 // מאזין להודעות שנשלחות לבוט בטלגרם ומחבר אוטומטית למשתמשת ב-Firebase
 let lastUpdateId = 0;
 async function pollTelegram() {
@@ -99,4 +164,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   pollTelegram();
+  checkBirthdaysAuto();
+  setInterval(checkBirthdaysAuto, 60 * 60 * 1000);
 });
